@@ -1,0 +1,11 @@
+#### DEV ####
+# mypy
+mypy
+types-click
+pandas-stubs
+#### RUNTIME ####
+# other
+click
+pandas
+glom
+seaborn
