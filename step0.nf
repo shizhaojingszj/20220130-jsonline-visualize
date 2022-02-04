@@ -85,6 +85,26 @@ process 'rescue normlized files' {
 }
 
 
-rescued_txt.view {
+process 'plot files' {
+  publishDir "./data", mode: 'symlink'
+
+  input:
+    file info_txt from rescued_txt
+    file python_script from helper_py
+
+  output:
+    file "${info_txt}.png" into png_files
+
+  script:
+    println(info_txt)
+
+    """
+    mypy ${python_script}
+    python ${python_script} plot-jsonline -i ${info_txt} -o ${info_txt}.png
+    """
+}
+
+
+png_files.view {
   println it
 }
