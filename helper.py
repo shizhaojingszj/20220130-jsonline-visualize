@@ -1,3 +1,4 @@
+from functools import wraps
 import json
 import pdb
 import re
@@ -5,14 +6,15 @@ import sys
 from pathlib import Path
 from typing import IO, Dict, List, Tuple, Iterator, Union
 from typing_extensions import TypeAlias
+from xmlrpc.client import Boolean
 
 import click
 import glom  # type: ignore
 import pandas as pd
 import numpy as np
 
-import seaborn as sns # type: ignore
-from matplotlib import pyplot as plt # type: ignore
+import seaborn as sns  # type: ignore
+from matplotlib import pyplot as plt  # type: ignore
 
 
 # helper
@@ -32,20 +34,22 @@ class ConfusionMatrix:
         labels = df.columns
         res: dict = {}
         assert df.shape[0] == df.shape[1], df.head()
-        res['acc'] = 0
+        res["acc"] = 0
         for index, label in enumerate(labels):
             res[f"{label}_acc"] = df.loc[index, label] / np.sum(df[label])
-            res['acc'] += df.loc[index, label] 
-        res['acc'] = res['acc'] / np.sum(np.sum(df))
+            res["acc"] += df.loc[index, label]
+        res["acc"] = res["acc"] / np.sum(np.sum(df))
         return res
-    
-    def convert(self, infile_list: Dict[int, str], info: str) -> List[Dict[str, ValueInDataFrame]]:
+
+    def convert(
+        self, infile_list: Dict[int, str], info: str
+    ) -> List[Dict[str, ValueInDataFrame]]:
         res: List[Dict[str, ValueInDataFrame]] = []
         for epoch_step, csv_file in infile_list.items():
             df1 = pd.read_csv(csv_file)
             acc_dict1 = self.calculate_acc(df1)
-            acc_dict1['epoch'] = epoch_step
-            acc_dict1['type'] = info
+            acc_dict1["epoch"] = epoch_step
+            acc_dict1["type"] = info
             res.append(acc_dict1)
         return res
 
@@ -59,24 +63,35 @@ class ConfusionMatrix:
             match = pat.match(csv_file.name)
             if not match:
                 continue
-            idx = int(match.groupdict()['idx'])
+            idx = int(match.groupdict()["idx"])
             res[idx] = str(csv_file.absolute())
         return res
 
-    def run(self):
+    def parse_any_info(self, any_info: List[str]) -> Dict[str, str]:
+        res = {}
+        for info in any_info:
+            k, v = glom.glom(info, lambda x: x.split("=", 1))
+            res[k] = v
+        return res
+
+    def run(self, any_info: List[str]):
         train_files = self.find_csv_files(self.indir, prefix="train_epoch")
         val_files = self.find_csv_files(self.indir, prefix="val_epoch")
         # to jsonline
-        with open(self.outfile, 'w') as OUT: # write both train and val to one file
+        with open(self.outfile, "w") as OUT:  # write both train and val to one file
             # train
             train_info = self.convert(train_files, "train")
             for train_epoch_info in train_info:
                 print(json.dumps(train_epoch_info), file=OUT)
-            print(f"{len(train_info)} training epoches output to {self.outfile}") 
+            print(f"{len(train_info)} training epoches output to {self.outfile}")
             # val
             val_info = self.convert(val_files, "val")
             for val_epoch_info in val_info:
-                print(json.dumps(val_epoch_info), file=OUT)
+                more = {
+                    **val_epoch_info,
+                    **self.parse_any_info(any_info),
+                }
+                print(json.dumps(more), file=OUT)
             print(f"{len(val_info)} validation output to {self.outfile}")
 
 
@@ -94,14 +109,14 @@ class Plot:
                 parsed: Dict = json.loads(temp)
                 if y in parsed:
                     yield parsed
-    
+
     def setup_seaborn(self, **kwargs):
-        if 'context' in kwargs:
-            sns.set_context(glom.glom(kwargs, 'context'))
-        if 'palette' in kwargs:
-            sns.set_palette(glom.glom(kwargs, 'palette'))
-        if 'figsize' in kwargs:
-            sns.set(rc={'figure.figsize': glom.glom(kwargs, 'figsize')})
+        if "context" in kwargs:
+            sns.set_context(glom.glom(kwargs, "context"))
+        if "palette" in kwargs:
+            sns.set_palette(glom.glom(kwargs, "palette"))
+        if "figsize" in kwargs:
+            sns.set(rc={"figure.figsize": glom.glom(kwargs, "figsize")})
 
     def only_data_with_y(self, y: List[str]):
         # now finish this
@@ -112,7 +127,7 @@ class Plot:
             if some_data:
                 good_data.append((some_y, some_data))
         return good_data
-        
+
     def run(
         self,
         *,
@@ -138,7 +153,7 @@ class Plot:
 
         xs: List[str] = x.split(",")
         print(f"xs is {xs}")
-        
+
         subplots_number = len(good_data)
         fig, axs = plt.subplots(nrows=subplots_number, squeeze=True)
         for n, (some_y, some_data) in enumerate(good_data):
@@ -152,13 +167,14 @@ class Plot:
                 else:
                     ax = axs[n]
                 sns.lineplot(x=x1[0], y=some_y, data=data_df, ax=ax)
-        fig.savefig(self.outfile, bbox_inches='tight')
+        fig.savefig(self.outfile, bbox_inches="tight")
 
 
 class Plot2(Plot):
     """
     把几个line画到一起
     """
+
     def run(
         self,
         *,
@@ -179,7 +195,7 @@ class Plot2(Plot):
         # 1. 获取数据，这里只取第一个y，因为这些y都是需要的
         y0 = y[0]
         good_data = self.only_data_with_y([y0])
-        
+
         # 获取变量，比较方便
         for n, (some_y, some_data) in enumerate(good_data):
             assert n == 0
@@ -192,13 +208,68 @@ class Plot2(Plot):
                 xlabel = x1[0]
             if not xlabel:
                 raise ValueError(f"No x({xs}) is found in file({self.infile})")
-            select_columns = ['type', xlabel] + y
+            select_columns = ["type", xlabel] + y
             data_df = pd.DataFrame.from_records(some_data, columns=select_columns)
-            data_df.to_csv("abc.df")
-            pdb.set_trace()
-            sns_plot = sns.lineplot(x=xlabel, data=data_df, style='type')
+            # melt
+            df2 = pd.melt(data_df, [xlabel, "type"])
+            sns_plot = sns.lineplot(
+                x=xlabel,
+                y="value",
+                hue="variable",
+                data=df2,
+                style="type",
+                palette=palette,
+            )
             fig = sns_plot.get_figure()
-            fig.savefig(self.outfile, bbox_inches='tight')
+            if self.outfile:
+                fig.savefig(self.outfile, bbox_inches="tight")
+            else:
+                return {
+                    "data": df2,
+                    "plot": sns_plot,
+                }
+
+
+class CombinedPlotter(Plot):
+    """
+    这个plotter的输入文件每行是一个结果文件夹的路径 + 配置用的json文件，用\t分隔
+    e.g. /mnt/GPU1-raid0/zhaomeng-from-GPU3/projects/20220128-fl/Federated_learning/Tdeeppath/temp/config.10.20220208_220626.json/ckpt/inceptionv3_class3_0208/tile299/confuse_matrix/
+        \t
+        /mnt/GPU1-raid0/zhaomeng-from-GPU3/projects/20220128-fl/Federated_learning/Tdeeppath/temp/json_output/config.10.20220208_220626.json
+    """
+
+    def parse_input(self) -> List[Tuple[str, str]]:
+        res = []
+        with open(self.input) as IN:
+            for line in IN:
+                temp = line.strip()
+                if should_ignore(temp):
+                    continue
+                folder: str  # confusion_matrix_output_folder
+                json_file: str  # json file with information
+                folder, json_file = glom.glom(temp, lambda x: x.split("\t"))
+                res.append(folder, json_file)
+        return res
+
+
+class CombinedPlotter1(CombinedPlotter):
+    def run(
+        self,
+        *,
+        context: str = "talk",
+        palette: str = "Blues",
+        x: str = "epoch",
+        y: List[str] = ["acc", "normal_acc", "luad_acc", "lusc_acc"],
+    ):
+
+        folder_info = self.parse_input()
+        self.setup_seaborn(
+            context=context,
+            palette=palette,
+            figsize=(12, 8),
+        )
+
+
 
 
 class TemporaryConverter:
@@ -239,8 +310,7 @@ class TemporaryConverter:
         return res
 
     def run(self):
-        """就是将几种模式的“不标准”，变成后续能够读入pandas的“简单”jsonline格式
-        """
+        """就是将几种模式的“不标准”，变成后续能够读入pandas的“简单”jsonline格式"""
         with open(self.infile) as IN, open(self.outfile, "w") as OUT:
             for line in IN:
                 temp = line.strip()
@@ -266,8 +336,7 @@ class Transformer:
         return obj
 
     def run(self):
-        """就是将几种模式的“不标准”，变成后续能够读入pandas的“简单”jsonline格式
-        """
+        """就是将几种模式的“不标准”，变成后续能够读入pandas的“简单”jsonline格式"""
         max_step = -1
 
         # 1st iteration, calculate max_step
@@ -329,8 +398,9 @@ def generate_shell(infile, outfile, sns_context, sns_palette, x, ys, class_name)
 @cli.command("from-confusion-matrix-to-jsonline")
 @click.option("-i", "--infile", required=True)
 @click.option("-o", "--outfile", required=True)
-def from_confusion_matrix_to_jsonline(infile, outfile):
-    ConfusionMatrix(infile, outfile).run()
+@click.argument("any_info", type=str, nargs=-1)
+def from_confusion_matrix_to_jsonline(infile, outfile, any_info):
+    ConfusionMatrix(infile, outfile).run(any_info)
 
 
 if __name__ == "__main__":
