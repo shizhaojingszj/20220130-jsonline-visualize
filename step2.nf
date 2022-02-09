@@ -1,5 +1,7 @@
 nextflow.enable.dsl = 2
 
+params.subset_specs = "optimizer_name scheduler_name"
+
 include { 
   convert_csv_files_to_jsonline; 
   plot_files as single_folder_plot;
@@ -60,6 +62,26 @@ process combine_plot {
 }
 
 
+process subset_json {
+  publishDir "./data", mode: 'symlink'
+
+  input:
+    tuple file(json_file), val(outfile)
+    file python_script
+  
+  output:
+    file("subset_json/${outfile}")
+
+  script:
+    """
+    mkdir subset_json
+
+    python ${python_script} subset-json -i ${json_file} -o subset_json/${outfile} ${params.subset_specs}
+    """
+
+}
+
+
 workflow single_plots_each_folder {
   def helper_py = get_helper_py()
 
@@ -80,17 +102,84 @@ workflow single_plots_each_folder {
       // output 
       def baseName = new File(json_file).name
       // use list as tuple, must specify file(cf_folder)
-      [file(cf_folder), "${baseName}.cf_jsonline"]
+      String jsonline_file_basename = "${baseName}.cf_jsonline"
+      [file(cf_folder), jsonline_file_basename]
   }.set {
-    abc
+    // 是给`process:convert_csv_files_to_jsonline`的输入
+    for_convert
   }
 
-  abc.view()
+  line_fields.map {
+    it -> 
+      def (cf_folder, json_file) = it
+      // output 
+      def baseName = new File(json_file).name
+      String subset_json = "${baseName}.subset.json"
+      [baseName, json_file, subset_json]
+  }.set {
+    for_join
+  }
 
-  convert_csv_files_to_jsonline(abc, helper_py)
+  convert_csv_files_to_jsonline(for_convert, helper_py)
+
+  convert_csv_files_to_jsonline.out.jsonline_file.map {
+    // prepare for join, key is json file base name
+    jsonline_file -> 
+      def baseName = new File(jsonline_file.toString()).name - ".cf_jsonline"
+      [baseName, jsonline_file]
+  }.join(for_join, failOnDuplicate: true, failOnMismatch: true)
+  .set {
+    // after join, should be [json_file_basename, jsonline_file, json_file, subset_json]
+    all_info
+  }
+
+  all_info.view {
+    it ->
+    def (json_file_basename, jsonline_file, json_file, subset_json) = it
+    [json_file_basename, jsonline_file, json_file, subset_json].each {
+      println "${it}, ${it.class}" 
+    }
+    "---------all_info"
+  }
+
+  // json文件中的某些信息要拿出来变成一个新的小json文件
+  all_info.map {
+    it ->
+      def (json_file_basename, jsonline_file, json_file, subset_json) = it
+      // `process:subset_json` 的第一个参数
+      [file(json_file), subset_json]
+  }.set {
+    for_subset_json
+  }
+
+  subset_json(for_subset_json, helper_py)
+
+  // 获取`process:single_folder_plot`的第一个参数
+  subset_json.out.map {
+    subset_json_file ->
+      def baseName = new File(subset_json_file.toString()).name - ".subset.json"
+      [baseName, subset_json_file]
+  }.join(all_info).map{
+    it ->
+      def (String json_file_basename, subset_json_file, json_line_file, json_file, String subset_json) = it
+      // `process:single_folder_plot`的第一个参数
+      [json_line_file, subset_json_file]
+  }.set {
+    for_plot
+  }
+
+  for_plot.view {
+    it -> 
+      println "${it}, for_plot"
+      def (json_line_file, subset_json_file) = it
+      [subset_json_file, json_line_file].each {
+        println "${it}, ${it.class}" 
+      }
+      "---------for_plot"
+  }
 
   single_folder_plot(
-    convert_csv_files_to_jsonline.out.jsonline_file, helper_py
+    for_plot, helper_py
   )
 
 }

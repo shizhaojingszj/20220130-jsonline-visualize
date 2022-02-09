@@ -40,7 +40,7 @@ process plot_files {
   publishDir "./data", mode: 'symlink'
 
   input:
-    file info_txt
+    tuple file(info_txt), file(other_info) // `other_info` can be /dev/null or real json info file
     file python_script
 
   output:
@@ -48,6 +48,12 @@ process plot_files {
 
   script:
     println(info_txt)
+    def other_info_cli = ""
+    // if filename is null, then don't do anything
+    if(other_info.name != "null") {
+      other_info_cli = "${other_info}"
+    }
+    println("other_info_cli: ${other_info_cli}")
 
     """
     python ${python_script} plot-jsonline \
@@ -55,7 +61,8 @@ process plot_files {
       --class-name Plot2 \
       --ys acc,normal_acc,luad_acc,lusc_acc \
       -x epoch \
-      --sns-palette ${params.palette}
+      --sns-palette ${params.palette} \
+      ${other_info_cli}
     """
 
 }
@@ -71,6 +78,6 @@ workflow {
     a, helper_py
   )
   plot_files(
-    convert_csv_files_to_jsonline.out.jsonline_file, helper_py
+    convert_csv_files_to_jsonline.out.jsonline_file, helper_py, file("/dev/null")
   )
 }

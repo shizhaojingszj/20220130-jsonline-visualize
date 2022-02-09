@@ -1,20 +1,20 @@
-from functools import wraps
 import json
 import pdb
 import re
 import sys
+import textwrap
+from functools import wraps
 from pathlib import Path
-from typing import IO, Dict, List, Tuple, Iterator, Union
-from typing_extensions import TypeAlias
+from typing import IO, Dict, Iterator, List, Tuple, Union
 from xmlrpc.client import Boolean
 
 import click
 import glom  # type: ignore
-import pandas as pd
 import numpy as np
-
+import pandas as pd
 import seaborn as sns  # type: ignore
 from matplotlib import pyplot as plt  # type: ignore
+from typing_extensions import TypeAlias
 
 
 # helper
@@ -23,6 +23,20 @@ def should_ignore(temp: str) -> bool:
 
 
 ValueInDataFrame: TypeAlias = Union[float, str]
+
+
+def parsed_any_info(func):
+    @wraps(func)
+    def inner(self, *args, **kwargs):
+        if "any_info" in kwargs:
+            any_info = kwargs.pop("any_info")
+            if hasattr(self, "parse_any_info"):
+                parse_any_info_func = getattr(self, "parse_any_info")
+                thing = parse_any_info_func(any_info)
+                kwargs.update(thing)
+        return func(self, *args, **kwargs)
+
+    return inner
 
 
 class ConfusionMatrix:
@@ -170,11 +184,48 @@ class Plot:
         fig.savefig(self.outfile, bbox_inches="tight")
 
 
+class CombinedPlotter(Plot):
+    """
+    这个plotter的输入文件每行是一个结果文件夹的路径 + 配置用的json文件，用\t分隔
+    e.g. /mnt/GPU1-raid0/zhaomeng-from-GPU3/projects/20220128-fl/Federated_learning/Tdeeppath/temp/config.10.20220208_220626.json/ckpt/inceptionv3_class3_0208/tile299/confuse_matrix/
+        \t
+        /mnt/GPU1-raid0/zhaomeng-from-GPU3/projects/20220128-fl/Federated_learning/Tdeeppath/temp/json_output/config.10.20220208_220626.json
+    """
+
+    def parse_input(self) -> List[Tuple[str, str]]:
+        res = []
+        with open(self.input) as IN:
+            for line in IN:
+                temp = line.strip()
+                if should_ignore(temp):
+                    continue
+                folder: str  # confusion_matrix_output_folder
+                json_file: str  # json file with information
+                folder, json_file = glom.glom(temp, lambda x: x.split("\t"))
+                res.append(folder, json_file)
+        return res
+
+
 class Plot2(Plot):
     """
     把几个line画到一起
     """
 
+    def get_title_info(self, title_info: Dict, **kwargs) -> str:
+        info: List[str] = textwrap.wrap(json.dumps(title_info), **kwargs)
+        return "\n" + "\n".join(info)
+
+    def parse_any_info(self, any_info: str):
+        with open(any_info) as IN:
+            parsed_info = json.load(IN)
+        title = "Acc"
+        title_info = parsed_info
+        return {
+            "title": title,
+            "title_info": title_info,
+        }
+
+    @parsed_any_info
     def run(
         self,
         *,
@@ -182,6 +233,8 @@ class Plot2(Plot):
         palette: str = "blue",
         x: str = "wholestep,epoch",
         y: List[str] = ["acc", "normal_acc", "luad_acc", "lusc_acc"],
+        title_info: Dict = {},  # 这个变量是可以保存的相关信息，可以放到title里面
+        title: str = "Acc",
     ):
         self.setup_seaborn(
             context=context,
@@ -220,6 +273,9 @@ class Plot2(Plot):
                 style="type",
                 palette=palette,
             )
+            if title_info:
+                title += self.get_title_info(title_info)
+            sns_plot.set_title(title)
             fig = sns_plot.get_figure()
             if self.outfile:
                 fig.savefig(self.outfile, bbox_inches="tight")
@@ -228,28 +284,6 @@ class Plot2(Plot):
                     "data": df2,
                     "plot": sns_plot,
                 }
-
-
-class CombinedPlotter(Plot):
-    """
-    这个plotter的输入文件每行是一个结果文件夹的路径 + 配置用的json文件，用\t分隔
-    e.g. /mnt/GPU1-raid0/zhaomeng-from-GPU3/projects/20220128-fl/Federated_learning/Tdeeppath/temp/config.10.20220208_220626.json/ckpt/inceptionv3_class3_0208/tile299/confuse_matrix/
-        \t
-        /mnt/GPU1-raid0/zhaomeng-from-GPU3/projects/20220128-fl/Federated_learning/Tdeeppath/temp/json_output/config.10.20220208_220626.json
-    """
-
-    def parse_input(self) -> List[Tuple[str, str]]:
-        res = []
-        with open(self.input) as IN:
-            for line in IN:
-                temp = line.strip()
-                if should_ignore(temp):
-                    continue
-                folder: str  # confusion_matrix_output_folder
-                json_file: str  # json file with information
-                folder, json_file = glom.glom(temp, lambda x: x.split("\t"))
-                res.append(folder, json_file)
-        return res
 
 
 class CombinedPlotter1(CombinedPlotter):
@@ -268,8 +302,6 @@ class CombinedPlotter1(CombinedPlotter):
             palette=palette,
             figsize=(12, 8),
         )
-
-
 
 
 class TemporaryConverter:
@@ -361,6 +393,22 @@ class Transformer:
                 print(json.dumps(new_format), file=OUT)
 
 
+class SubsetJson:
+
+    def __init__(self, infile: str, outfile: str):
+        self.infile = infile
+        self.outfile = outfile
+
+    def run(self, specs: List[str]) -> None:
+        with open(self.infile) as IN:
+            parse_input = json.load(IN)
+        res = {}
+        for spec in specs:
+            res[spec] = glom.glom(parse_input, spec)
+        with open(self.outfile, 'w') as OUT:
+            print(json.dumps(res), file=OUT)
+
+
 @click.group()
 def cli():
     pass
@@ -388,10 +436,20 @@ def rescue(infile, outfile):
 @click.option("-x", default="wholestep,epoch")
 @click.option("--ys", default="valid,train,lr")
 @click.option("--class-name", default="Plot")
-def generate_shell(infile, outfile, sns_context, sns_palette, x, ys, class_name):
+@click.argument("any_info", type=str, default="")
+def generate_shell(
+    infile, outfile, sns_context, sns_palette, x, ys, class_name, any_info
+):
     Plot_class = globals()[class_name]
+    kwargs = {}
+    if any_info:
+        kwargs = {"any_info": any_info}
     Plot_class(infile, outfile).run(
-        context=sns_context, palette=sns_palette, x=x, y=ys.split(",")
+        context=sns_context,
+        palette=sns_palette,
+        x=x,
+        y=ys.split(","),
+        **kwargs,
     )
 
 
@@ -401,6 +459,14 @@ def generate_shell(infile, outfile, sns_context, sns_palette, x, ys, class_name)
 @click.argument("any_info", type=str, nargs=-1)
 def from_confusion_matrix_to_jsonline(infile, outfile, any_info):
     ConfusionMatrix(infile, outfile).run(any_info)
+
+
+@cli.command("subset-json")
+@click.option("-i", "--infile", required=True)
+@click.option("-o", "--outfile", required=True)
+@click.argument("specs", type=str, nargs=-1)
+def subset_json(infile, outfile, specs):
+    SubsetJson(infile, outfile).run(specs)
 
 
 if __name__ == "__main__":
