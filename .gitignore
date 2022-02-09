@@ -1,0 +1,6 @@
+*
+!*.nf
+!*.py
+!requirements.txt
+!.gitignore
+!*.ipynb

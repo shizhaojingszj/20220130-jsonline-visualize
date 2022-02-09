@@ -3,6 +3,7 @@
 mypy
 types-click
 pandas-stubs
+jupyter
 #### RUNTIME ####
 # other
 click
