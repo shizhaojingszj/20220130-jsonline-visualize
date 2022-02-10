@@ -5,7 +5,7 @@ import sys
 import textwrap
 from functools import wraps
 from pathlib import Path
-from typing import IO, Dict, Iterator, List, Tuple, Union
+from typing import IO, Dict, Iterator, List, Tuple, Union, Any
 from xmlrpc.client import Boolean
 
 import click
@@ -114,16 +114,6 @@ class Plot:
         self.infile = infile
         self.outfile = outfile
 
-    def filter_data_with_y(self, y: str) -> Iterator[Dict]:
-        with open(self.infile) as IN:
-            for line in IN:
-                temp = line.strip()
-                if should_ignore(temp):
-                    continue
-                parsed: Dict = json.loads(temp)
-                if y in parsed:
-                    yield parsed
-
     def setup_seaborn(self, **kwargs):
         if "context" in kwargs:
             sns.set_context(glom.glom(kwargs, "context"))
@@ -131,16 +121,6 @@ class Plot:
             sns.set_palette(glom.glom(kwargs, "palette"))
         if "figsize" in kwargs:
             sns.set(rc={"figure.figsize": glom.glom(kwargs, "figsize")})
-
-    def only_data_with_y(self, y: List[str]):
-        # now finish this
-        # 1. parse data
-        good_data: List[Tuple[str, List[Dict]]] = []
-        for some_y in y:
-            some_data = list(self.filter_data_with_y(some_y))
-            if some_data:
-                good_data.append((some_y, some_data))
-        return good_data
 
     def run(
         self,
@@ -158,7 +138,7 @@ class Plot:
         )
 
         # 1. filter data with y
-        good_data = self.only_data_with_y(y)
+        good_data = JsonlineReader(self.infile).only_data_with_y(y)
 
         # 2. plot one by one
         if not good_data:
@@ -194,7 +174,7 @@ class CombinedPlotter(Plot):
 
     def parse_input(self) -> List[Tuple[str, str]]:
         res = []
-        with open(self.input) as IN:
+        with open(self.infile) as IN:
             for line in IN:
                 temp = line.strip()
                 if should_ignore(temp):
@@ -202,7 +182,7 @@ class CombinedPlotter(Plot):
                 folder: str  # confusion_matrix_output_folder
                 json_file: str  # json file with information
                 folder, json_file = glom.glom(temp, lambda x: x.split("\t"))
-                res.append(folder, json_file)
+                res.append((folder, json_file))
         return res
 
 
@@ -274,8 +254,8 @@ class Plot2(Plot):
                 palette=palette,
             )
             if title_info:
-                title += self.get_title_info(title_info)
-            sns_plot.set_title(title)
+                title1 = title + self.get_title_info(title_info)
+            sns_plot.set_title(title1)
             fig = sns_plot.get_figure()
             if self.outfile:
                 fig.savefig(self.outfile, bbox_inches="tight")
@@ -286,7 +266,75 @@ class Plot2(Plot):
                 }
 
 
+class JsonlineReader:
+    def __init__(self, infile: str):
+        self.infile = infile
+
+    def filter_data_with_y(self, y: str) -> Iterator[Dict]:
+        with open(self.infile) as IN:
+            for line in IN:
+                temp = line.strip()
+                if should_ignore(temp):
+                    continue
+                parsed: Dict = json.loads(temp)
+                if y in parsed:
+                    yield parsed
+
+    def only_data_with_y(self, y: List[str]):
+        # now finish this
+        # 1. parse data
+        good_data: List[Tuple[str, List[Dict]]] = []
+        for some_y in y:
+            some_data = list(self.filter_data_with_y(some_y))
+            if some_data:
+                good_data.append((some_y, some_data))
+        return good_data
+
+
 class CombinedPlotter1(CombinedPlotter):
+
+    def get_title_info(self, title_info: Dict, **kwargs) -> str:
+        info: List[str] = textwrap.wrap(json.dumps(title_info), **kwargs)
+        return "\n" + "\n".join(info)
+
+    def parse_any_info(self, any_info: str) -> Dict[str, Any]:
+        """
+        any_info: subset_json_list
+        这个文件的格式：三个field用\\t分隔
+        分别是<config_json_base_name>\t<subset_json_fullpath>\t<jsonline_fullpath>
+        """
+        pat = re.compile("(?P<base>.*)\.subset\.json")
+        # def get_json_basename(filename: str):
+        #     spec = (lambda x: pat.match(x), glom.T.groupdict(), "base")
+        #     return glom.glom(Path(filename).name, spec)
+        all_lines = []
+        with open(any_info) as IN:
+            for line in IN:
+                temp = line.strip()
+                if should_ignore(temp):
+                    continue
+                fields = glom.glom(temp, (glom.T.split("\t"),))
+                assert len(fields) == 3, fields
+                all_lines.append(fields)
+        # 将subset_json的信息都读取出来，并存成字典，因为顺序是不明确的
+        # 字典的key为config_json_basename
+        subset_json_info: Dict[str, Dict] = {}
+        jsonline_info: Dict[str, str] = {}
+        for config_json_base_name, subset_json_fullpath, jsonline_fullpath in all_lines:
+            with open(subset_json_fullpath) as IN:
+                subset_info = json.load(IN)
+            subset_json_info[config_json_base_name] = subset_info
+            jsonline_info[config_json_base_name] = jsonline_fullpath
+        title = "Acc"
+        title_info = subset_json_info
+        # 构建一个字典，作为run函数的输入
+        return {
+            "title": title,
+            "title_info": title_info,
+            "jsonline_info": jsonline_info,
+        }
+
+    @parsed_any_info
     def run(
         self,
         *,
@@ -294,14 +342,74 @@ class CombinedPlotter1(CombinedPlotter):
         palette: str = "Blues",
         x: str = "epoch",
         y: List[str] = ["acc", "normal_acc", "luad_acc", "lusc_acc"],
+        title: str,
+        title_info: Dict[str, Dict],
+        jsonline_info: Dict[str, str],
     ):
 
+        # 这些信息好像没有什么用了，只是保留用于debug吧？
         folder_info = self.parse_input()
+
         self.setup_seaborn(
             context=context,
             palette=palette,
-            figsize=(12, 8),
+            figsize=(30, 24),
         )
+
+        xs: List[str] = x.split(",")
+        print(f"xs is {xs}")
+
+        def to_df(config_json_base_name: str, jsonline_file: str) -> pd.DataFrame:
+            y0 = y[0]
+            good_data = JsonlineReader(jsonline_file).only_data_with_y([y0])
+            for n, (some_y, some_data) in enumerate(good_data):
+                assert n == 0
+                x1 = [x0 for x0 in xs if x0 in glom.glom(some_data, glom.T[0])]
+                print(f"x1 is {x1}")
+                xlabel = None
+                if x1:
+                    ### 注意这里的x只取第一个找到的 ###
+                    # only first x is used
+                    xlabel = x1[0]
+                if not xlabel:
+                    raise ValueError(f"No x({xs}) is found in file({self.infile})")
+                select_columns = ["type", xlabel] + y
+                data_df = pd.DataFrame.from_records(some_data, columns=select_columns)
+                # melt
+                df2 = pd.melt(data_df, [xlabel, "type"])
+                df2["name"] = config_json_base_name
+                return df2
+            raise NotImplementedError("cannot get here")
+
+        jsonline_to_df = glom.glom(
+            jsonline_info.items(),
+            (
+                [lambda item: to_df(item[0], item[1])],
+            ),
+        )
+
+        combined_df = pd.concat(jsonline_to_df)
+        combined_df.to_csv("combined.df")
+
+        # real plot
+        fig, axes = plt.subplots(nrows=2, ncols=4, squeeze=True)
+        axes = axes.flatten()
+        for n, name in enumerate(sorted(combined_df.name.unique())):
+            sub_df = combined_df[combined_df.name==name]
+            sns_plot = sns.lineplot(
+                x="epoch",
+                y="value",
+                hue="variable",
+                data=sub_df,
+                style="type",
+                palette="husl",
+                ax=axes[n],
+            )
+            title_info1 = title_info[name]
+            if title_info1:
+                title1 = title + self.get_title_info(title_info1)
+            sns_plot.set_title(title1)
+        fig.savefig(self.outfile)
 
 
 class TemporaryConverter:
@@ -394,7 +502,6 @@ class Transformer:
 
 
 class SubsetJson:
-
     def __init__(self, infile: str, outfile: str):
         self.infile = infile
         self.outfile = outfile
@@ -405,7 +512,7 @@ class SubsetJson:
         res = {}
         for spec in specs:
             res[spec] = glom.glom(parse_input, spec)
-        with open(self.outfile, 'w') as OUT:
+        with open(self.outfile, "w") as OUT:
             print(json.dumps(res), file=OUT)
 
 
