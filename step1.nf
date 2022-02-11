@@ -10,9 +10,14 @@ scriptDir = new File(workflow.scriptFile.toString()).parent
 println("scriptDir=${scriptDir}")
 // helper.py
 helper_py = file(new File(scriptDir, './helper.py').canonicalPath)
+plot_jsonnet = file(new File(scriptDir, './plot.jsonnet').canonicalPath)
 
 def get_helper_py() {
   helper_py
+}
+
+def get_plot_jsonnet(){
+  plot_jsonnet
 }
 
 

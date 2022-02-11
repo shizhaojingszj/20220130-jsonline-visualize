@@ -129,12 +129,13 @@ class Plot:
         palette: str = "blue",
         x: str = "wholestep,epoch",
         y: List[str] = ["valid", "train", "lr"],
+        figsize=(12, 8),
     ):
 
         self.setup_seaborn(
             context=context,
             palette=palette,
-            figsize=(12, 8),
+            figsize=figsize,
         )
 
         # 1. filter data with y
@@ -213,13 +214,14 @@ class Plot2(Plot):
         palette: str = "blue",
         x: str = "wholestep,epoch",
         y: List[str] = ["acc", "normal_acc", "luad_acc", "lusc_acc"],
+        figsize=(12, 8),
         title_info: Dict = {},  # 这个变量是可以保存的相关信息，可以放到title里面
         title: str = "Acc",
     ):
         self.setup_seaborn(
             context=context,
             palette=palette,
-            figsize=(12, 8),
+            figsize=figsize,
         )
 
         xs: List[str] = x.split(",")
@@ -292,7 +294,6 @@ class JsonlineReader:
 
 
 class CombinedPlotter1(CombinedPlotter):
-
     def get_title_info(self, title_info: Dict, **kwargs) -> str:
         info: List[str] = textwrap.wrap(json.dumps(title_info), **kwargs)
         return "\n" + "\n".join(info)
@@ -345,15 +346,24 @@ class CombinedPlotter1(CombinedPlotter):
         title: str,
         title_info: Dict[str, Dict],
         jsonline_info: Dict[str, str],
+        figsize=(30, 24),
+        plot_grid=(2, 4),
+        # jsonnet config sns
     ):
 
         # 这些信息好像没有什么用了，只是保留用于debug吧？
         folder_info = self.parse_input()
 
+        # 用于判断一下plot_grid的个数是否合理
+        assert len(folder_info) <= plot_grid[0] * plot_grid[1], (
+            folder_info,
+            plot_grid,
+        )
+
         self.setup_seaborn(
             context=context,
             palette=palette,
-            figsize=(30, 24),
+            figsize=figsize,
         )
 
         xs: List[str] = x.split(",")
@@ -383,19 +393,17 @@ class CombinedPlotter1(CombinedPlotter):
 
         jsonline_to_df = glom.glom(
             jsonline_info.items(),
-            (
-                [lambda item: to_df(item[0], item[1])],
-            ),
+            ([lambda item: to_df(item[0], item[1])],),
         )
 
         combined_df = pd.concat(jsonline_to_df)
-        combined_df.to_csv("combined.df")
+        combined_df.to_csv(self.outfile + ".df")
 
         # real plot
-        fig, axes = plt.subplots(nrows=2, ncols=4, squeeze=True)
+        fig, axes = plt.subplots(nrows=plot_grid[0], ncols=plot_grid[1], squeeze=True)
         axes = axes.flatten()
         for n, name in enumerate(sorted(combined_df.name.unique())):
-            sub_df = combined_df[combined_df.name==name]
+            sub_df = combined_df[combined_df.name == name]
             sns_plot = sns.lineplot(
                 x="epoch",
                 y="value",
@@ -543,9 +551,18 @@ def rescue(infile, outfile):
 @click.option("-x", default="wholestep,epoch")
 @click.option("--ys", default="valid,train,lr")
 @click.option("--class-name", default="Plot")
+@click.option("--fig-size", default="12,8")
 @click.argument("any_info", type=str, default="")
 def generate_shell(
-    infile, outfile, sns_context, sns_palette, x, ys, class_name, any_info
+    infile,
+    outfile,
+    sns_context,
+    sns_palette,
+    x,
+    ys,
+    class_name,
+    any_info,
+    fig_size,
 ):
     Plot_class = globals()[class_name]
     kwargs = {}
@@ -556,6 +573,27 @@ def generate_shell(
         palette=sns_palette,
         x=x,
         y=ys.split(","),
+        figsize=fig_size.split(","),
+        **kwargs,
+    )
+
+
+@cli.command("plot-jsonline2", help="use jsonnet")
+@click.option("--config-json", required=True)
+@click.argument("any_info", type=str, default="")
+def generate_shell(any_info, config_json):
+    with open(config_json) as IN:
+        json_config = json.load(IN)
+
+    def j(spec):
+        return glom.glom(json_config, spec)
+
+    Plot_class = globals()[j("class_name")]
+    kwargs = {}
+    if any_info:
+        kwargs = {"any_info": any_info}
+    Plot_class(j("infile"), j("outfile")).run(
+        **j("sns"),
         **kwargs,
     )
 

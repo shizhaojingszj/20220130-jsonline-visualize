@@ -1,11 +1,14 @@
 nextflow.enable.dsl = 2
 
 params.subset_specs = "optimizer_name scheduler_name"
+params.jsonnet_args = ""
+params.folder_list = "folder_list2"
 
 include { 
   convert_csv_files_to_jsonline; 
   plot_files as single_folder_plot;
   get_helper_py;
+  get_plot_jsonnet;
 } from './step1'
 
 
@@ -13,7 +16,7 @@ process get_confusion_matrix_folders {
   publishDir "./data", mode: 'symlink'
 
   output:
-    path "folder.list", emit: folder_list
+    path "${params.folder_list}", emit: folder_list
 
   script:
     """
@@ -28,7 +31,7 @@ process get_confusion_matrix_folders {
     def get_json_file(json_folder: Path) -> Path:
       return file1 / "json_output" / json_folder.name
 
-    with open("folder.list", 'w') as OUT:
+    with open("${params.folder_list}", 'w') as OUT:
       for folder in sorted(file1.iterdir()):
         if pat.match(folder.name):
           # glob for confusion_matrix folder, a.k.a 'confuse_matrix'
@@ -77,6 +80,39 @@ process combine_plot {
 }
 
 
+process combine_plot2 {
+    publishDir "./data", mode: 'symlink'
+
+  input:
+    file folder_list
+    file subset_json_list
+    val outfile
+    file python_script
+    file jsonnet_file
+
+  output:
+    file "combined_plot2/${outfile}"
+
+  script:
+    """
+    mkdir combined_plot2
+    # jsonnet
+    jsonnet ${jsonnet_file} \
+      --tla-str ys=acc,normal_acc,luad_acc,lusc_acc \
+      --tla-str x=epoch \
+      --tla-str sns_palette=${params.palette} \
+      --tla-str infile=${folder_list} \
+      --tla-str outfile=combined_plot2/${outfile} \
+      --tla-str class_name=CombinedPlotter1 \
+      ${params.jsonnet_args} > combined_plot2/${outfile}.config.json
+    # python
+    python ${python_script} plot-jsonline2 \
+      --config-json combined_plot2/${outfile}.config.json \
+      ${subset_json_list}
+    """
+}
+
+
 process subset_json {
   publishDir "./data", mode: 'symlink'
 
@@ -91,7 +127,7 @@ process subset_json {
     """
     mkdir subset_json
 
-    python ${python_script} subset-json -i ${json_file} -o subset_json/${outfile} ${params.subset_specs}
+    python ${python_script} subset-json -i ${json_file} -o subset_json/${outfile} -- ${params.subset_specs}
     """
 
 }
@@ -390,8 +426,48 @@ workflow single_plots_each_folder {
 }
 
 
+workflow run_combine_plot_workflow {
+  take:
+    folder_list
+    helper_py
+    plot_jsonnet
+
+  main:
+    // first convert to jsonlines
+    convert_to_jsonline_workflow(folder_list, helper_py)
+
+    // get all_info
+    get_all_info_workflow(convert_to_jsonline_workflow.out.converted_jsonline, convert_to_jsonline_workflow.out.for_join)
+
+    // subset_json
+    subset_json_workflow(get_all_info_workflow.out.all_info, helper_py)
+
+    // collect_subset_json
+    collect_subset_json_workflow(
+      subset_json_workflow.out, 
+      get_all_info_workflow.out.all_info
+    )
+
+    // collect_subset_json_workflow.out.view {
+    //   it -> 
+    //     println "File ${it} containing collected subset_json filenames created."
+    //   "-----------collect_subset_json_workflow"
+    // }
+
+    combine_plot2(
+      folder_list, // folder_list
+      collect_subset_json_workflow.out,  // subset_json_list
+      "out.png", // val outfile
+      helper_py, // python_script
+      plot_jsonnet, // plot_jsonnet
+    )
+}
+
+
 workflow run_combine_plot {
+
   def helper_py = get_helper_py()
+  def plot_jsonnet = get_plot_jsonnet()
 
   get_confusion_matrix_folders()
 
@@ -400,36 +476,9 @@ workflow run_combine_plot {
     "-------------folder_list"
   }
 
-  // first convert to jsonlines
-  convert_to_jsonline_workflow(get_confusion_matrix_folders.out.folder_list, helper_py)
-
-    // get all_info
-  get_all_info_workflow(convert_to_jsonline_workflow.out.converted_jsonline, convert_to_jsonline_workflow.out.for_join)
-
-  // subset_json
-  subset_json_workflow(get_all_info_workflow.out.all_info, helper_py)
-
-  // collect_subset_json
-  collect_subset_json_workflow(
-    subset_json_workflow.out, 
-    get_all_info_workflow.out.all_info
+  run_combine_plot_workflow(
+    get_confusion_matrix_folders.out.folder_list,
+    helper_py,
+    plot_jsonnet,
   )
-
-  collect_subset_json_workflow.out.view {
-    it -> 
-      println "File ${it} containing collected subset_json filenames created."
-    "-----------collect_subset_json_workflow"
-  }
-
-  combine_plot(
-    get_confusion_matrix_folders.out.folder_list, // folder_list
-    collect_subset_json_workflow.out,  // subset_json_list
-    "out.png", // val outfile
-    helper_py, // python_script
-  )
-}
-
-
-workflow {
-  run_combine_plot()
 }
