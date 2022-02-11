@@ -348,6 +348,8 @@ class CombinedPlotter1(CombinedPlotter):
         jsonline_info: Dict[str, str],
         figsize=(30, 24),
         plot_grid=(2, 4),
+        xlimits=None,
+        ylimits=None,
         # jsonnet config sns
     ):
 
@@ -417,6 +419,10 @@ class CombinedPlotter1(CombinedPlotter):
             if title_info1:
                 title1 = title + self.get_title_info(title_info1)
             sns_plot.set_title(title1)
+            if xlimits:
+                sns_plot.set_xlim(xlimits[0], xlimits[1])
+            if ylimits:
+                sns_plot.set_ylim(ylimits[0], ylimits[1])
         fig.savefig(self.outfile)
 
 
