@@ -229,7 +229,7 @@ class Plot2(Plot):
 
         # 1. 获取数据，这里只取第一个y，因为这些y都是需要的
         y0 = y[0]
-        good_data = self.only_data_with_y([y0])
+        good_data = JsonlineReader(self.infile).only_data_with_y([y0])
 
         # 获取变量，比较方便
         for n, (some_y, some_data) in enumerate(good_data):
@@ -257,6 +257,8 @@ class Plot2(Plot):
             )
             if title_info:
                 title1 = title + self.get_title_info(title_info)
+            else:
+                title1 = title
             sns_plot.set_title(title1)
             fig = sns_plot.get_figure()
             if self.outfile:

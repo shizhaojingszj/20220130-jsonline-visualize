@@ -75,14 +75,26 @@ process plot_files {
 
 workflow {
   // e.g. /mnt/GPU1-raid0/zhaomeng-from-GPU3/projects/20220128-fl/Federated_learning/Tdeeppath/temp/config.5.20220207_175258.json/ckpt/inceptionv3_class3_0207/tile299/confuse_matrix
-  def csv_dir = file(params.csv_dir)
-  a = Channel.of([
-    [csv_dir, "out.jsonline"]
-  ])
+  def csv_dir = params.csv_dir
+  a = Channel.from(file(csv_dir)).map {
+    it -> 
+    [it, "out.jsonline"]
+  }
+  
   convert_csv_files_to_jsonline(
     a, helper_py
   )
+
+  convert_csv_files_to_jsonline.out.jsonline_file.map {
+    it -> 
+    println "it is ${it}"
+    [it, file("/dev/null")]
+  }.set {
+    abc
+  }
+
   plot_files(
-    convert_csv_files_to_jsonline.out.jsonline_file, helper_py, file("/dev/null")
+    abc,
+    helper_py
   )
 }
