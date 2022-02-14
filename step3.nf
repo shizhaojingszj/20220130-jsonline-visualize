@@ -186,6 +186,64 @@ process get_confusion_matrix_folders3 {
 }
 
 
+process get_confusion_matrix_folders4 {
+  publishDir "./data", mode: 'symlink'
+
+  output:
+    path "${params.folder_list}", emit: folder_list
+
+  // 这批准备比较的是：
+  // 共同：strategy3的training transform，strategy1 并且都是exampleNo == 2
+  // 不同：scheduler（stepLR vs customLR1）以及optimizer（rms，sgd，adam）
+  script:
+    """
+    #! python
+    from pathlib import Path
+    from typing import Optional, List
+    import re
+
+    pat = re.compile("^config\\.[2][0-9]{1}\\.([\\d_]+)\\.json\$")
+    # folder of basedir1
+    ## file1表示所有结果文件夹，及早期一部分json_output文件夹
+    file1 = Path("/mnt/GPU1-raid0/zhaomeng-from-GPU3/projects/20220128-fl/Federated_learning/Tdeeppath/temp")
+    ## file3是json_output所在位置
+    file3 = Path("/mnt/GPU1-raid0/zhaomeng-from-GPU3/projects/20220128-fl/Federated_learning/Tdeeppath/temp_20220213")
+
+    def get_json_file(json_folder: Path, dirs: List[Path]) -> Optional[Path]:
+      for dir in dirs:
+        json_file: Path = dir / "json_output" / json_folder.name
+        if json_file.is_file():
+          return json_file
+      return None
+
+    base_folders = [file3]
+
+    with open("${params.folder_list}", 'w') as OUT:
+      for folder in sorted(file1.iterdir()):
+        # 这些全部是含有模型及log的文件夹
+        if pat.match(folder.name):
+          # glob for confusion_matrix folder, a.k.a 'confuse_matrix'
+          confusion_matrix_folder = list(folder.rglob("confuse_matrix"))
+
+          # only write to output if found
+          if confusion_matrix_folder:
+            json_file = get_json_file(folder, base_folders)
+            if not json_file:
+              print(f"Cannot find json file for folder: {folder}")
+              continue
+            else:
+              print(f"{confusion_matrix_folder[0].absolute()}\\t{json_file}", file=OUT)
+          else:
+            # don't fail, only warn to stdout
+            print(f"Cannot find confusion_matrix folder in {folder}")
+        else:
+          # debug purpose
+          print(f"skip {folder.absolute()}")
+    """
+
+}
+
+
 workflow run_combine_plot {
 
   def helper_py = get_helper_py()
@@ -238,6 +296,28 @@ workflow run_combine_plot_old_2_and_new_4_total_6 {
 
   run_combine_plot_workflow(
     get_confusion_matrix_folders3.out.folder_list,
+    helper_py,
+    plot_jsonnet,
+  )
+}
+
+
+workflow run_combine_plot_new_6_with_example2 {
+  /**
+  主要是想看6个是否可以一致
+  */
+  def helper_py = get_helper_py()
+  def plot_jsonnet = get_plot_jsonnet()
+
+  get_confusion_matrix_folders4()
+
+  get_confusion_matrix_folders4.out.folder_list.view {
+    println "File ${it} created."
+    "-------------folder_list"
+  }
+
+  run_combine_plot_workflow(
+    get_confusion_matrix_folders4.out.folder_list,
     helper_py,
     plot_jsonnet,
   )

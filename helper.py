@@ -352,6 +352,7 @@ class CombinedPlotter1(CombinedPlotter):
         plot_grid=(2, 4),
         xlimits=None,
         ylimits=None,
+        title_wrap_width=70,
         # jsonnet config sns
     ):
 
@@ -419,7 +420,7 @@ class CombinedPlotter1(CombinedPlotter):
             )
             title_info1 = title_info[name]
             if title_info1:
-                title1 = title + self.get_title_info(title_info1)
+                title1 = title + self.get_title_info(title_info1, width=title_wrap_width)
             sns_plot.set_title(title1)
             if xlimits:
                 sns_plot.set_xlim(xlimits[0], xlimits[1])
